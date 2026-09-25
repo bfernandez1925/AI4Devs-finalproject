@@ -53,6 +53,7 @@ La IA propone y una persona decide. Ejemplos reales de este proyecto:
 - **Modelo de monetización.** El autor definió las reglas de negocio (todos los jugadores gastan partidas, juegos VIP de compra única con prueba gratuita, promociones desde el CMS) y la IA las tradujo en un ledger y en cambios de spec pendientes.
 - **Historias y tickets.** La primera propuesta de la IA era demasiado genérica y no seguía el orden de desarrollo. El autor lo cuestionó y se rehízo como una rebanada vertical concreta, con la base de datos poblada con un script.
 - **Verificación del `.gitignore`.** El autor pidió comprobar qué se subía al repo y se detectó una carpeta de borradores que se habría colado.
+- **Revisión automática del PR (CodeRabbit).** El pull request recibió 6 hallazgos válidos, que se corrigieron: pasos de instalación en terminales separadas para los procesos de larga duración; un ejemplo de partida de El Infiltrado con menos jugadores que el mínimo; identidad de los participantes desalineada entre Firestore y la API (se introdujo un `participantId` generado por el host); descarga de paquetes VIP sin control de acceso (Storage sin lectura directa y URL firmada solo para `owned`); caché del catálogo sin política por usuario (`Cache-Control: private, no-store`); y ciclo de vida de la identidad de invitado offline sin definir.
 - **Límites de la IA.** En el entorno de trabajo no se pudieron renderizar los diagramas Mermaid ni subir al repositorio, por lo que ambas cosas las verifica y realiza el autor.
 
 ---

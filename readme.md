@@ -131,28 +131,31 @@ plyoff-project/
 └── firebase.json Configuración de Hosting, Firestore, Storage y Functions
 ```
 
-**Puesta en marcha en local**
+**Puesta en marcha en local.** Los emuladores, el CMS, la web y la app son procesos de larga duración: cada uno se ejecuta en su propia terminal, y el seed en otra distinta cuando los emuladores ya están listos.
 
 ```bash
-# 1. Clonar el repositorio
+# Preparación (una sola vez)
 git clone https://github.com/bfernandez1925/plyoff-project.git
 cd plyoff-project
+(cd functions && npm install)
+(cd cms && npm install)
+(cd landing && npm install)
+(cd app && flutter pub get)
 
-# 2. Backend y base de datos con los emuladores de Firebase
-cd functions && npm install && cd ..
+# Terminal 1: emuladores de Firebase (se queda en ejecución)
 firebase emulators:start        # Functions, Firestore, Auth, Storage y Hosting
 
-# 3. Cargar datos de ejemplo (juegos, packs y saldos de prueba)
+# Terminal 2: datos de ejemplo (con los emuladores ya levantados; termina solo)
 npm run seed --prefix functions
 
-# 4. CMS de administración
-cd cms && npm install && npm start      # http://localhost:4200
+# Terminal 3: CMS de administración (se queda en ejecución)
+cd cms && npm start             # http://localhost:4200
 
-# 5. Web de presentación
-cd landing && npm install && npm run dev
+# Terminal 4: web de presentación (se queda en ejecución)
+cd landing && npm run dev
 
-# 6. Aplicación móvil (con un dispositivo conectado)
-cd app && flutter pub get && flutter run
+# Terminal 5: aplicación móvil (con un dispositivo conectado)
+cd app && flutter run
 ```
 
 **Configuración.** Las claves y credenciales no se versionan: se copia `.env.example` a `.env` en cada paquete. Para trabajar en local solo se necesitan los emuladores, sin proyecto de Firebase real.
@@ -234,7 +237,7 @@ flowchart LR
 - **Motor de juego (`GameRuntime`).** Ejecuta las reglas de un juego durante una sesión a partir de su `GameDefinition` (acciones válidas, estado compartido y privado, condición de fin, política de abandono, resultados). Es independiente del transporte y del contenido concreto de cada juego.
 - **API (Firebase Cloud Functions, Node 22, TypeScript).** Funciones HTTPS que exponen el catálogo, consumen partidas del saldo, registran y sincronizan resultados y gestionan promociones. Es la única vía de escritura sobre el saldo.
 - **Base de datos (Cloud Firestore).** Usuarios, catálogo de juegos y packs, derechos de acceso, ledger de partidas, historial y promociones. Con persistencia offline en el cliente.
-- **Almacenamiento (Cloud Storage).** Paquetes de contenido de cada juego (reglas, palabras, recursos), versionados y con huella de integridad, que la app descarga antes de jugar.
+- **Almacenamiento (Cloud Storage).** Paquetes de contenido de cada juego (reglas, palabras, recursos), versionados y con huella de integridad, que la app descarga antes de jugar mediante URLs firmadas que la API solo emite a quien tiene acceso al juego; los clientes no leen Storage directamente.
 - **Autenticación (Firebase Authentication).** Login social con Google y Apple, y sesión anónima para invitados, que se vincula a la cuenta al registrarse.
 - **Notificaciones (Firebase Cloud Messaging).** Promociones, regalos de partidas y avisos.
 - **CMS (Angular + PrimeNG).** Panel de administración: alta y edición de juegos y packs, gestión de jugadores, saldos y promociones, con acceso restringido a administradores.
@@ -308,6 +311,7 @@ flowchart LR
 - **Información privada de la partida.** El estado privado de cada jugador (por ejemplo su palabra secreta) solo se envía al dispositivo de ese jugador y nunca se difunde al resto. Por defecto no se revela al terminar la partida, salvo que las reglas del juego lo definan.
 - **Comunicación local.** Cada sala usa un identificador de sesión y el host valida que cada acción procede de un participante admitido. Está previsto cifrar los mensajes a nivel de aplicación con una clave de sesión acordada al unirse; su validación es parte de la prueba de concepto de BLE.
 - **Integridad del contenido.** Los paquetes de juego descargados incluyen una huella (hash) que la app comprueba antes de marcarlos como preparados para jugar sin conexión.
+- **Control de acceso al contenido.** Las reglas de Storage impiden cualquier lectura directa desde el cliente. La API comprueba el derecho de acceso (`owned` o `trial`) antes de emitir una URL firmada de corta duración, y nunca la emite para un juego con `access: none`.
 - **Secretos y configuración.** Ninguna credencial se versiona (`.gitignore` y `.env.example`); las claves del servidor se guardan en Secret Manager y se usa Firebase App Check para que solo la app legítima acceda a los servicios.
 - **Privacidad y consentimiento.** Se recoge el mínimo de datos personales, el registro es opcional para la primera partida, y los anuncios y las funciones sociales futuras requerirán consentimiento explícito conforme al RGPD.
 - **Validación de entradas.** Las funciones validan y sanean todos los parámetros recibidos antes de operar.
@@ -433,7 +437,7 @@ erDiagram
     }
     MATCH_PARTICIPANTS {
         string matchId PK, FK
-        string participantId PK "Índice dentro de la partida"
+        string participantId PK "UUID generado por el host al iniciar la partida"
         string uid FK "Nulo si era invitado"
         string alias "Nombre mostrado en la sala"
         string result "Resultado de ese jugador"
@@ -442,11 +446,11 @@ erDiagram
 
 **Notas de modelado**
 
-- **Subcolecciones.** `wallets`, `ledger_entries` y `entitlements` cuelgan de `users/{uid}`; `game_versions` cuelga de `games/{gameId}`; `match_participants` se guarda incrustado en el documento de `matches` (como lista de mapas) porque siempre se lee junto a la partida.
+- **Subcolecciones.** `wallets`, `ledger_entries` y `entitlements` cuelgan de `users/{uid}`; `game_versions` cuelga de `games/{gameId}`; `match_participants` se guarda incrustado en el documento de `matches` (como lista de mapas) porque siempre se lee junto a la partida. Cada participante lleva un `participantId` (UUID que genera el host al iniciar la partida): es su identidad dentro de la partida y no el alias, que puede repetirse. El servidor nunca lo regenera, así que reenviar el mismo `matchId` produce el mismo resultado.
 - **Unicidad.** Firestore no tiene restricciones `UNIQUE`, así que el nombre de usuario se reserva creando un documento en `usernames/{username}` dentro de una transacción; si ya existe, falla.
 - **Saldo derivado del ledger.** El saldo (`wallets.balance`) es una lectura rápida del resultado de sumar los movimientos de `ledger_entries`. La fuente de verdad es el ledger, que solo se escribe desde Cloud Functions.
 - **Caché local.** La app móvil mantiene en SQLite una copia del catálogo descargado, el saldo y una cola de movimientos pendientes de sincronizar para poder jugar sin conexión.
-- **Invitados.** Un invitado tiene un UID anónimo de Firebase y un documento mínimo en `users`; al registrarse, la cuenta se vincula al mismo UID, de modo que conserva su saldo, sus pruebas y su historial.
+- **Invitados y ciclo de vida de su identidad.** La sesión anónima de Firebase se crea la primera vez que la app se abre con conexión, algo que ocurre siempre antes de jugar sin cobertura, porque la app y el contenido de los juegos se descargan antes. Si la app se abre por primera vez sin conexión, el invitado usa una **identidad local** (un identificador aleatorio y un alias por defecto guardados en el dispositivo) y participa en la sala con un `participantId` y sin `uid`. Al recuperar la conexión, la app crea la sesión anónima y sincroniza su cola pendiente bajo ese UID: los movimientos del ledger (idempotentes por `entryId`) y las partidas jugadas. Una partida solo se atribuye a un invitado si el `participantId` que guarda su app coincide con el de la plaza que registró el host (un UUID aleatorio que únicamente conocen ese dispositivo y el host); entonces se rellena el `uid` de esa plaza. Al registrarse con Google o Apple, la credencial se **vincula al mismo UID anónimo**, así que el UID no cambia y el saldo, las pruebas, el historial y la cola de sincronización se conservan sin reconciliar nada. Si la cuenta social ya existía en otro dispositivo, el servidor migra los movimientos y partidas del invitado al UID existente (el saldo se recalcula desde el ledger y los derechos de acceso se unen); esa fusión queda fuera del MVP como trabajo futuro.
 
 ### **3.2. Descripción de entidades principales:**
 
@@ -499,7 +503,7 @@ El rol de administrador del CMS **no** se guarda aquí: se gestiona con *custom 
 
 **`promotions`** (`promotions/{promotionId}`): campañas gestionadas desde el CMS. Atributos: `name`, `type`, `amount` (partidas que concede), `startsAt`, `endsAt` (posterior a `startsAt`), `status` y `createdBy`. Relación 1 a N con `ledger_entries`.
 
-**`matches`** (`matches/{matchId}`): historial de partidas, sincronizado después de jugar. Atributos: `gameId` y `gameVersion`, `hostUid` (opcional), `outcome` (`completed` o `aborted`), `playerCount` (entre `minPlayers` y 8), `participantUids` (lista de UID registrados para consultar el historial de cada jugador), `participants` (lista de mapas con `alias`, `uid` opcional y `result`), `startedAt` y `endedAt`. La partida se identifica con un `matchId` generado por el host, que también sirve de clave de idempotencia.
+**`matches`** (`matches/{matchId}`): historial de partidas, sincronizado después de jugar. Atributos: `gameId` y `gameVersion`, `hostUid` (opcional), `outcome` (`completed` o `aborted`), `playerCount` (entre `minPlayers` y 8), `participantUids` (lista de UID registrados para consultar el historial de cada jugador), `participants` (lista de mapas con `participantId`, `alias`, `uid` opcional y `result`), `startedAt` y `endedAt`. La partida se identifica con un `matchId` generado por el host, que también sirve de clave de idempotencia.
 
 **Índices previstos:** `matches` por `participantUids` (array-contains) y `endedAt` descendente; `ledger_entries` por `createdAt` descendente; `games` por `status` y `category`.
 
@@ -523,7 +527,7 @@ paths:
   /v1/catalog:
     get:
       summary: Catálogo de juegos publicados
-      description: Devuelve los juegos publicados con su versión vigente y los datos para descargar el paquete, además de los derechos del usuario sobre cada juego.
+      description: "Devuelve los juegos publicados con su versión vigente y los derechos del usuario sobre cada juego. La URL de descarga del paquete solo se incluye cuando el acceso es `owned`; con `trial` solo se incluyen la huella y el tamaño (el contenido se recibe del host de la sala) y con `none` no se incluye paquete. La respuesta es privada y no cacheable (`Cache-Control: private, no-store`)."
       responses:
         "200":
           description: Catálogo
@@ -602,8 +606,10 @@ paths:
               startedAt: "2026-09-25T10:15:00Z"
               endedAt: "2026-09-25T10:21:30Z"
               participants:
-                - { uid: uid-borja, alias: Borja, result: winner }
-                - { alias: Invitado 3, result: loser }
+                - { participantId: 3f2b9c1e-0a4d-4e7b-9c55-1b7f6d2a8e01, uid: uid-borja, alias: Borja, result: winner }
+                - { participantId: a91d5e70-7c3b-42f6-8d1e-5f0c2b9a7d33, alias: Ana, result: winner }
+                - { participantId: c04e7b92-51aa-4d68-b3f0-92e8d1a6c5f4, alias: Luis, result: winner }
+                - { participantId: 5b8d2f13-9e6c-4a07-8c21-d7f3a0e4b916, alias: Invitado 3, result: loser }
       responses:
         "201":
           description: Partida registrada
@@ -636,7 +642,7 @@ components:
         package:
           type: object
           properties:
-            downloadUrl: { type: string }
+            downloadUrl: { type: string, description: Solo presente si access.kind es owned }
             sha256: { type: string }
             sizeBytes: { type: integer }
         access:
@@ -659,9 +665,13 @@ components:
           maxItems: 8
           items:
             type: object
-            required: [alias]
+            required: [participantId, alias]
             properties:
-              uid: { type: string, description: Ausente si el participante era invitado }
+              participantId:
+                type: string
+                format: uuid
+                description: Identificador de la plaza dentro de la partida, generado por el host al iniciarla. El servidor lo conserva tal cual, de modo que reenviar el mismo matchId es idempotente y se distingue a jugadores con el mismo alias. No puede repetirse dentro de una partida.
+              uid: { type: string, description: Ausente si el participante era invitado sin sesión sincronizada }
               alias: { type: string }
               result: { type: string }
 ```
@@ -736,7 +746,7 @@ Los tres tickets forman una **rebanada vertical** del producto, ordenada como se
 - **Descripción.** Definir la seguridad y la estructura consultable de Firestore según el modelo de datos de la sección 3, y crear un script que cargue datos de ejemplo para poder desarrollar y probar en local sin depender de datos reales.
 - **Tareas.**
   1. Crear `firestore.rules` con denegación por defecto y estas reglas: el catálogo (`games` publicados y sus versiones) es de lectura pública; `users/{uid}` y sus subcolecciones solo las lee su propietario; `wallet`, `ledger` y `entitlements` son de solo lectura para el cliente (solo escriben las Cloud Functions); `games` y `promotions` solo las modifica un usuario con el *claim* de administrador; `matches` la lee quien figure en `participantUids` y no la escribe el cliente.
-  2. Crear `storage.rules`: los paquetes de contenido son de lectura autenticada y solo escriben los administradores.
+  2. Crear `storage.rules`: los clientes no pueden leer directamente los paquetes de contenido (ni siquiera con sesión autenticada o anónima); solo escriben los administradores. La descarga se hace únicamente mediante URLs firmadas que emite la API tras comprobar el derecho de acceso.
   3. Crear `firestore.indexes.json` con los índices compuestos de la sección 3.2 (`matches` por `participantUids` y `endedAt`; `ledger` por `createdAt`; `games` por `status` y `category`).
   4. Crear `functions/scripts/seed.ts`, ejecutable con `npm run seed`, que use el SDK de administración contra los emuladores y cargue: dos juegos (El Infiltrado, gratuito, y La Mentira Perfecta, VIP), sus versiones con el paquete subido al emulador de Storage y su huella SHA-256 calculada, una promoción activa y un usuario de prueba con saldo de 5 partidas. El script debe negarse a ejecutarse contra el proyecto real salvo que se pase una marca explícita.
   5. Escribir tests de reglas con `@firebase/rules-unit-testing`.
@@ -744,6 +754,7 @@ Los tres tickets forman una **rebanada vertical** del producto, ordenada como se
   - Un cliente autenticado no puede escribir en `wallet` ni en `ledger`; el test falla si se permite.
   - Un usuario no administrador no puede crear ni modificar juegos ni promociones.
   - Un usuario no puede leer los documentos de otro usuario.
+  - Un usuario autenticado, incluso anónimo, no puede leer un paquete de contenido directamente desde Storage.
   - `npm run seed` con los emuladores levantados deja el catálogo consultable y es idempotente (ejecutarlo dos veces no duplica datos).
   - `firebase emulators:start` carga reglas e índices sin errores.
 - **Definición de hecho.** Reglas y script en el repositorio, tests de reglas en verde y documentado en el README cómo cargar los datos de ejemplo.
@@ -755,15 +766,16 @@ Los tres tickets forman una **rebanada vertical** del producto, ordenada como se
 - **Tareas.**
   1. Crear el manejador en `functions/src/handlers/catalog.ts` (Node 22, TypeScript, región `europe-west1`) y registrarlo bajo `/v1/catalog`.
   2. Añadir un *middleware* que verifique el token de Firebase Authentication (también de sesiones anónimas) y responda 401 si falta o no es válido.
-  3. Consultar los juegos con `status == published`, obtener su versión vigente y generar una URL de descarga firmada de corta duración (15 minutos) para el paquete de Storage.
-  4. Calcular el campo `access` de cada juego: `owned` si es gratuito o el usuario lo posee, `trial` con las partidas de prueba restantes, o `none`.
-  5. Validar la forma de la respuesta y añadir cabeceras de caché adecuadas.
+  3. Consultar los juegos con `status == published` y obtener su versión vigente.
+  4. Calcular el campo `access` de cada juego (`owned` si es gratuito o el usuario lo posee, `trial` con las partidas de prueba restantes, o `none`) antes de generar ninguna URL. Generar la URL de descarga firmada (15 minutos) solo para `owned`. Con `trial` se devuelven únicamente la huella y el tamaño, porque el contenido llega desde el host de la sala por Bluetooth y se verifica con el SHA-256; con `none` no se devuelve paquete.
+  5. Validar la forma de la respuesta y devolver `Cache-Control: private, no-store`, porque el contenido depende del usuario (derechos de acceso y URLs firmadas). Si en el futuro se habilita alguna caché, debe aislarse por identidad autenticada.
   6. Escribir tests unitarios y de integración con los emuladores.
 - **Criterios de aceptación.**
   - Sin token responde 401; con token válido responde 200 con el formato de la sección 4.
   - Solo aparecen juegos publicados; los borradores y archivados nunca se devuelven.
   - `package.sha256` coincide con la huella del fichero real en Storage.
-  - Un juego VIP no comprado devuelve `access: none` (o `trial` si le quedan pruebas).
+  - Un juego VIP no comprado devuelve `access: none` (o `trial` si le quedan pruebas), en ambos casos sin `downloadUrl`.
+  - La respuesta lleva `Cache-Control: private, no-store`, y un test con dos usuarios comprueba que nunca reciben el contenido del otro.
   - El tiempo de respuesta con el catálogo de ejemplo es inferior a 500 ms en emulador.
 - **Definición de hecho.** Endpoint con tests en verde, contrato de la sección 4 respetado y probado con los datos del script de PLY-1.
 
